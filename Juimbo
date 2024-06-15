@@ -1,0 +1,92 @@
+
+import ccxt
+import pandas as pd
+from ta.momentum import RSIIndicator
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+import logging
+
+# Configuration du journal
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Configuration de l'API
+exchange = ccxt.binance({
+    'apiKey': 'VOTRE_CLE_API',
+    'secret': 'VOTRE_CLE_SECRETE',
+})
+
+# Paramètres constants
+SYMBOL = 'BTC/USDT'
+INTERVAL = '1h'
+LIMIT = 1000
+RSI_WINDOW = 14
+TEST_SIZE = 0.2
+RANDOM_STATE = 42
+N_ESTIMATORS = 100
+
+class CryptoTradingBot:
+    def __init__(self, symbol, interval, limit, rsi_window, test_size, random_state, n_estimators):
+        self.symbol = symbol
+        self.interval = interval
+        self.limit = limit
+        self.rsi_window = rsi_window
+        self.test_size = test_size
+        self.random_state = random_state
+        self.n_estimators = n_estimators
+        self.model = RandomForestClassifier(n_estimators=self.n_estimators, random_state=self.random_state)
+
+    def recuperer_ohlcv(self):
+        logging.info(f"Fetching OHLCV data for {self.symbol}")
+        ohlcv = exchange.fetch_ohlcv(self.symbol, self.interval, limit=self.limit)
+        data = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+        data.set_index('timestamp', inplace=True)
+        return data
+
+    def ajouter_indicateurs(self, df):
+        logging.info("Calculating RSI indicator")
+        df['rsi'] = RSIIndicator(df['close'], window=self.rsi_window).rsi()
+        df.dropna(inplace=True)
+        return df
+
+    def preparer_donnees(self, df):
+        logging.info("Preparing data with future returns and targets")
+        df['rendement_futur'] = df['close'].shift(-1) / df['close'] - 1
+        df['cible'] = (df['rendement_futur'] > 0).astype(int)
+        df.drop(columns=['rendement_futur'], inplace=True)
+        return df
+
+    def entrainer_modele(self):
+        logging.info("Training the model")
+        data = self.recuperer_ohlcv()
+        data = self.ajouter_indicateurs(data)
+        data = self.preparer_donnees(data)
+        X = data[['rsi']]
+        y = data['cible']
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=self.test_size, random_state=self.random_state)
+        self.model.fit(X_train, y_train)
+        logging.info("Model training complete")
+
+    def trader(self):
+        try:
+            logging.info("Starting the trading function")
+            recent_data = self.recuperer_ohlcv()
+            recent_data = self.ajouter_indicateurs(recent_data)
+            X_live = recent_data[['rsi']].tail(1)
+            prediction = self.model.predict(X_live)
+            
+            if prediction == 1:
+                logging.info("Signal d'achat")
+                # Passer l'ordre d'achat
+                # exchange.create_market_buy_order(self.symbol, amount)
+            else:
+                logging.info("Signal de vente")
+                # Passer l'ordre de vente
+                # exchange.create_market_sell_order(self.symbol, amount)
+        except Exception as e:
+            logging.error(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    bot = CryptoTradingBot(SYMBOL, INTERVAL, LIMIT, RSI_WINDOW, TEST_SIZE, RANDOM_STATE, N_ESTIMATORS)
+    bot.entrainer_modele()
+    bot.trader()
